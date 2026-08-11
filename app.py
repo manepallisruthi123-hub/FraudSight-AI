@@ -268,38 +268,111 @@ def extract_text_from_image(pil_image):
 
 
 def extract_receipt_fields(text):
-    """Best-effort field extraction from OCR text. Never fabricates missing data —
-    returns 'Not detected' when a field can't be confidently found."""
+    """Robust field extraction from OCR text with typo-tolerance."""
     fields = {}
 
-    amt_match = re.search(r"(?:₹|Rs\.?|INR)\s?([\d,]+(?:\.\d{1,2})?)", text, re.IGNORECASE)
-    fields['amount'] = f"₹{amt_match.group(1)}" if amt_match else "Not detected"
+    # 1. Amount: handles 'Amount 12.880.00', 'Amount: 2890.00', or '₹2,890.00'
+    amt_match = re.search(
+        r"(?:Amount|Amt|Paid|Total)\s*[:\-'\"]*\s*(?:₹|Rs\.?|INR)?\s*([\d,\.]+(?:\.\d{1,2})?)",
+        text,
+        re.IGNORECASE
+    )
 
-    date_match = re.search(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})", text)
+    if not amt_match:
+        amt_match = re.search(
+            r"(?:₹|Rs\.?|INR)\s*([\d,\.]+)",
+            text,
+            re.IGNORECASE
+        )
+
+    if not amt_match:
+        amt_match = re.search(
+            r"\b(\d{1,7}\.\d{1,2})\b",
+            text
+        )
+
+    fields['amount'] = (
+        f"₹{amt_match.group(1)}"
+        if amt_match else "Not detected"
+    )
+
+    # 2. Date
+    date_match = re.search(
+        r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        text
+    )
+
     if not date_match:
         date_match = re.search(
             r"(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})",
-            text, re.IGNORECASE
+            text,
+            re.IGNORECASE
         )
-    fields['date'] = date_match.group(1) if date_match else "Not detected"
 
-    time_match = re.search(r"(\d{1,2}:\d{2}(?:\s?[APap][Mm])?)", text)
-    fields['time'] = time_match.group(1) if time_match else "Not detected"
+    fields['date'] = (
+        date_match.group(1)
+        if date_match else "Not detected"
+    )
 
+    # 3. Time
+    time_match = re.search(
+        r"(\d{1,2}:\d{2}(?:\s?[APap][Mm])?)",
+        text
+    )
+
+    fields['time'] = (
+        time_match.group(1)
+        if time_match else "Not detected"
+    )
+
+    # 4. Payment App
     apps_found = []
-    for keyword, label in [("phonepe", "PhonePe"), ("paytm", "Paytm"), ("google pay", "Google Pay"), ("gpay", "Google Pay"), ("upi", "UPI")]:
+    for keyword, label in [
+        ("phonepe", "PhonePe"),
+        ("paytm", "Paytm"),
+        ("google pay", "Google Pay"),
+        ("gpay", "Google Pay"),
+        ("upi", "UPI")
+    ]:
         if keyword in text.lower() and label not in apps_found:
             apps_found.append(label)
-    fields['payment_app'] = ", ".join(apps_found) if apps_found else "Not detected"
 
-    txn_match = re.search(
-        r"(?:UTR|Txn(?:\s?ID)?|Transaction\s?ID|Ref(?:erence)?\s?(?:No\.?|Number))[:\s]*([A-Za-z0-9]{6,})",
-        text, re.IGNORECASE
+    fields['payment_app'] = (
+        ", ".join(apps_found)
+        if apps_found else "Not detected"
     )
-    fields['txn_id'] = txn_match.group(1) if txn_match else "Not detected"
 
-    merchant_match = re.search(r"(?:Paid to|Received by|Payee)[:\s]+([A-Za-z0-9 .&]{2,40})", text, re.IGNORECASE)
-    fields['merchant'] = merchant_match.group(1).strip() if merchant_match else "Not detected"
+    # 5. Transaction / Reference ID (handles 'xn ID', 'ef No', 'UTR', or raw long numbers)
+    txn_match = re.search(
+        r"(?:UTR|[T]?xn(?:\s?ID)?|Transaction\s?ID|[R]?ef(?:\s?No\.?|Number))"
+        r"[:\s\.'\"]*([A-Za-z0-9]{6,})",
+        text,
+        re.IGNORECASE
+    )
+
+    if not txn_match:
+        txn_match = re.search(
+            r"\b([A-Za-z0-9]{10,22})\b",
+            text
+        )
+
+    fields['txn_id'] = (
+        txn_match.group(1)
+        if txn_match else "Not detected"
+    )
+
+    # 6. Merchant / Receiver (handles 'Paid to', 'Paid ta', 'Paid 2')
+    merchant_match = re.search(
+        r"(?:Paid\s?[tT][oa2]|Received\s+by|Payee)"
+        r"[:\s]+([A-Za-z0-9 .&]{2,40})",
+        text,
+        re.IGNORECASE
+    )
+
+    fields['merchant'] = (
+        merchant_match.group(1).strip()
+        if merchant_match else "Not detected"
+    )
 
     return fields
 
