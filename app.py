@@ -36,7 +36,7 @@ sample_df = pd.read_csv('sample_transactions.csv')
 EXPECTED_COLUMNS = sample_df.columns.tolist()
 
 # ==========================================================
-# Helper functions — core model (UNCHANGED)
+# Helper functions — core model
 # ==========================================================
 def get_risk_level(prob):
     if prob >= threshold:
@@ -165,7 +165,6 @@ def show_batch_alert(fraud_count, total, highest_risk):
 
 # ==========================================================
 # Helper functions — SMS / Receipt text pattern scanner (rule-based)
-# Shared by both the SMS mode and the new Receipt Screenshot mode
 # ==========================================================
 PHISHING_PATTERNS = [
     (r"\b(won|winner|congratulations|lucky draw|lottery)\b", "Prize/lottery bait language", 25),
@@ -180,16 +179,10 @@ PHISHING_PATTERNS = [
     (r"\b(customer care|helpline)\b.{0,20}\b(\d{10}|call)\b", "Fake customer-care/helpline number pattern", 15),
 ]
 
-# NOTE: App/brand names (PhonePe, Paytm, GPay, UPI) are NOT treated as fraud
-# indicators by themselves. They only trigger an extra caution note when they
-# co-occur with genuinely suspicious patterns above.
 TRUSTED_SENDER_HINTS = ["phonepe", "paytm", "gpay", "google pay", "bhim", "upi"]
 
 
 def scan_text_for_fraud_patterns(text):
-    """Lightweight rule-based heuristic scanner. NOT a trained ML model —
-    flags known phishing/scam patterns via keyword/regex matching.
-    Used by both the SMS scanner and the Receipt Screenshot scanner."""
     text_lower = text.lower()
     score = 0
     matched = []
@@ -220,7 +213,6 @@ def safety_recommendation(score):
 
 
 def render_pattern_scan_result(score, matched, text_for_brand_check):
-    """Shared result-rendering block used by both SMS mode and Receipt Screenshot mode."""
     risk_word, color = risk_band(score)
     st.markdown(
         f"""
@@ -248,12 +240,10 @@ def render_pattern_scan_result(score, matched, text_for_brand_check):
         )
 
 # ==========================================================
-# Helper functions — Receipt Screenshot OCR (NEW)
+# Helper functions — Receipt Screenshot OCR
 # ==========================================================
 def extract_text_from_image(pil_image):
-    """Runs OCR on a PIL image. Returns (text, error_code_or_None)."""
     try:
-        # Resize very large images for faster, more reliable OCR
         max_dim = 2200
         if max(pil_image.size) > max_dim:
             ratio = max_dim / max(pil_image.size)
@@ -345,16 +335,16 @@ def extract_receipt_fields(text):
     # 5. Transaction / Reference ID (handles 'xn ID', 'ef No', 'UTR', or raw long numbers)
     txn_match = re.search(
         r"(?:UTR|[T]?xn(?:\s?ID)?|Transaction\s?ID|[R]?ef(?:\s?No\.?|Number))"
-        r"[:\s\.'\"]*([A-Za-z0-9]{6,})",
+        r"[:\s\.'\"]*([A-Za-z0-9]{10,25})",
         text,
         re.IGNORECASE
     )
 
     if not txn_match:
-        txn_match = re.search(
-            r"\b([A-Za-z0-9]{10,22})\b",
-            text
-        )
+        txn_match = re.search(r"\b(T\d{10,22})\b", text, re.IGNORECASE)
+
+    if not txn_match:
+        txn_match = re.search(r"\b([A-Za-z0-9]{12,22})\b", text)
 
     fields['txn_id'] = (
         txn_match.group(1)
@@ -364,15 +354,14 @@ def extract_receipt_fields(text):
     # 6. Merchant / Receiver (handles 'Paid to', 'Paid ta', 'Paid 2')
     merchant_match = re.search(
         r"(?:Paid\s?[tT][oa2]|Received\s+by|Payee)"
-        r"[:\s]+([A-Za-z0-9 .&]{2,40})",
+        r"[:\s\n]+([A-Za-z0-9 .&@]{2,40})",
         text,
         re.IGNORECASE
     )
 
-    fields['merchant'] = (
-        merchant_match.group(1).strip()
-        if merchant_match else "Not detected"
-    )
+    merchant_val = merchant_match.group(1).strip() if merchant_match else "Not detected"
+    merchant_val = re.sub(r"^[^A-Za-z0-9]+", "", merchant_val)
+    fields['merchant'] = merchant_val if merchant_val else "Not detected"
 
     return fields
 
@@ -406,7 +395,7 @@ mode = st.radio(
 )
 
 # ==========================================================
-# MODE 1: Single transaction (UNCHANGED)
+# MODE 1: Single transaction
 # ==========================================================
 if mode == "Single Transaction (sample data)":
     st.subheader("Select a transaction to analyze")
@@ -445,7 +434,7 @@ if mode == "Single Transaction (sample data)":
         show_feature_note()
 
 # ==========================================================
-# MODE 2: CSV upload (batch analysis) (UNCHANGED)
+# MODE 2: CSV upload (batch analysis)
 # ==========================================================
 elif mode == "Upload CSV (batch analysis)":
     st.subheader("Upload a transaction CSV")
@@ -576,7 +565,7 @@ elif mode == "Upload CSV (batch analysis)":
         )
 
 # ==========================================================
-# MODE 3: SMS / Receipt Text Check (Beta) — rule-based (UNCHANGED)
+# MODE 3: SMS / Receipt Text Check (Beta)
 # ==========================================================
 elif mode == "SMS / Receipt Check (Beta)":
     st.subheader("📩 SMS / Payment Receipt Fraud Check")
@@ -618,7 +607,7 @@ elif mode == "SMS / Receipt Check (Beta)":
     )
 
 # ==========================================================
-# MODE 4: Receipt Screenshot Check (Beta) — OCR + rule-based (NEW)
+# MODE 4: Receipt Screenshot Check (Beta)
 # ==========================================================
 else:
     st.subheader("📷 Payment Receipt Fraud Check")
@@ -649,7 +638,6 @@ else:
         uploaded_image = st.file_uploader("Upload a receipt screenshot (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"])
 
         if uploaded_image is not None:
-            # Guard against unreadable/corrupted/unsupported files
             try:
                 pil_img = Image.open(uploaded_image).convert("RGB")
             except Exception:
@@ -705,7 +693,7 @@ else:
     )
 
 # ==========================================================
-# Model comparison table (always visible, UNCHANGED)
+# Model comparison table (always visible)
 # ==========================================================
 st.divider()
 st.subheader("Model Performance Summary")
